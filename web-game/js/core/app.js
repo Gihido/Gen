@@ -32,6 +32,8 @@ export class RPGApp {
       selectedGender: GENDERS[0],
       adminTab: 'players',
       adminSelectedUser: null,
+      adminItemType: 'weapon',
+      adminMonsterLocation: 'Главная',
       lastRegenAt: Date.now()
     };
     this.applyDynamicContent();
@@ -47,6 +49,14 @@ export class RPGApp {
       if (!btn) return;
       const { action, ...payload } = btn.dataset;
       if (this[action]) this[action](payload, e);
+    });
+
+    document.addEventListener('change', (e) => {
+      const node = e.target.closest('[data-change-action]');
+      if (!node) return;
+      const action = node.dataset.changeAction;
+      if (!this[action]) return;
+      this[action]({ value: node.value, id: node.id }, e);
     });
   }
 
@@ -67,23 +77,20 @@ export class RPGApp {
   }
 
   applyDynamicContent() {
-    Object.entries(this.content.items || {}).forEach(([key, value]) => {
-      STATIC_ITEMS[key] = value;
-    });
-
+    Object.entries(this.content.items || {}).forEach(([key, value]) => { STATIC_ITEMS[key] = value; });
     Object.entries(this.content.monstersByLocation || {}).forEach(([location, monsters]) => {
       if (!LOCATION_CONFIG[location]) return;
-      LOCATION_CONFIG[location].monsters = monsters;
+      LOCATION_CONFIG[location].monsters = monsters.slice(0, 5);
     });
-  }
-
-  saveContentLog(action, payload = {}) {
-    Storage.pushChangeLog({ action, payload, by: this.state.currentUser || 'system' });
   }
 
   persistContent() {
     Storage.setGameContent(this.content);
     this.applyDynamicContent();
+  }
+
+  saveContentLog(action, payload = {}) {
+    Storage.pushChangeLog({ action, payload, by: this.state.currentUser || 'system' });
   }
 
   tickRegeneration() {
@@ -92,11 +99,10 @@ export class RPGApp {
     this.ui.lastRegenAt = now;
     const player = this.getUser();
     if (!player) return;
-    const prevHp = player.hp;
-    const prevMp = player.mp;
+    const before = `${player.hp}|${player.mp}`;
     player.hp = Math.min(player.hpMax, player.hp + 1);
     player.mp = Math.min(player.mpMax, player.mp + 1);
-    if (player.hp !== prevHp || player.mp !== prevMp) {
+    if (`${player.hp}|${player.mp}` !== before) {
       this.saveUser(player);
       this.updateLiveBars(player);
     }
@@ -107,13 +113,8 @@ export class RPGApp {
     const mpValue = document.getElementById('live-mp');
     if (hpValue) hpValue.textContent = `${player.hp}/${player.hpMax}`;
     if (mpValue) mpValue.textContent = `${player.mp}/${player.mpMax}`;
-
-    document.querySelectorAll('[data-live-hp]').forEach((node) => {
-      node.style.width = `${Math.max(0, Math.min(100, Math.floor((player.hp / player.hpMax) * 100)))}%`;
-    });
-    document.querySelectorAll('[data-live-mp]').forEach((node) => {
-      node.style.width = `${Math.max(0, Math.min(100, Math.floor((player.mp / player.mpMax) * 100)))}%`;
-    });
+    document.querySelectorAll('[data-live-hp]').forEach((node) => { node.style.width = `${Math.floor((player.hp / player.hpMax) * 100)}%`; });
+    document.querySelectorAll('[data-live-mp]').forEach((node) => { node.style.width = `${Math.floor((player.mp / player.mpMax) * 100)}%`; });
   }
 
   getUser() {
@@ -154,31 +155,35 @@ export class RPGApp {
     if (!player.world.mainChest) player.world.mainChest = { items: [] };
   }
 
-  getMonsterForLocation(player, locationName) {
+  getMonstersForLocation(player, locationName) {
     const cfg = LOCATION_CONFIG[locationName];
-    if (!cfg?.monsters?.length) return null;
-    const mcfg = cfg.monsters[0];
-    const persisted = player.world[locationName].monsters[mcfg.key] || {};
-    const monster = new Monster(mcfg, persisted);
-    player.world[locationName].monsters[mcfg.key] = monster.toJSON();
-    return monster;
+    if (!cfg?.monsters?.length) return [];
+    const list = cfg.monsters.slice(0, 5).map((mcfg) => {
+      const persisted = player.world[locationName].monsters[mcfg.key] || {};
+      const m = new Monster(mcfg, persisted);
+      player.world[locationName].monsters[mcfg.key] = m.toJSON();
+      return m;
+    });
+    return list;
+  }
+
+  getMonsterByKey(player, locationName, key) {
+    return this.getMonstersForLocation(player, locationName).find((m) => m.key === key) || null;
   }
 
   syncMonsterRespawns() {
     const player = this.getUser();
     if (!player) return;
     this.ensureWorld(player);
-    const cfg = LOCATION_CONFIG[player.location];
-    if (!cfg?.monsters?.length) return;
-    const mcfg = cfg.monsters[0];
-    const persisted = player.world[player.location].monsters[mcfg.key] || {};
-    const beforeAlive = persisted.isAlive ?? true;
-    const monster = new Monster(mcfg, persisted);
-    player.world[player.location].monsters[mcfg.key] = monster.toJSON();
-    if (!beforeAlive && monster.isAlive) {
+    const monsters = this.getMonstersForLocation(player, player.location);
+    let changed = false;
+    monsters.forEach((m) => {
+      const persisted = player.world[player.location].monsters[m.key];
+      if ((persisted?.isAlive ?? true) !== m.isAlive) changed = true;
+    });
+    if (changed) {
       this.saveUser(player);
       this.state.notify();
-      showNotification(`${monster.name} снова появился в локации.`, NotificationType.INFO, 1800);
     }
   }
 
@@ -187,24 +192,22 @@ export class RPGApp {
       this.root.innerHTML = renderAuthScreen({ classes: CLASSES, genders: GENDERS, mode: this.ui.authMode, selectedClass: this.ui.selectedClass, selectedGender: this.ui.selectedGender });
       return;
     }
-
     const player = this.getUser();
     if (!player) return this.state.dispatch({ type: 'LOGOUT' });
     this.ensureWorld(player);
-    const isAdmin = this.isAdminUser();
-    const selectedAdminUser = this.ui.adminSelectedUser || this.state.currentUser;
 
     if (this.state.screen === 'location') {
-      const monster = this.getMonsterForLocation(player, player.location);
+      const monsters = this.getMonstersForLocation(player, player.location);
       this.saveUser(player);
       this.root.innerHTML = renderLocationScreen({
         player,
         location: LOCATION_CONFIG[player.location],
-        monster,
+        monster: monsters[0] || null,
+        monsters,
         statBar,
         ui: this.ui,
-        isAdmin,
-        selectedAdminUser,
+        isAdmin: this.isAdminUser(),
+        selectedAdminUser: this.ui.adminSelectedUser || this.state.currentUser,
         playersDB: this.state.playersDB,
         skills: SKILL_LIBRARY,
         items: STATIC_ITEMS,
@@ -212,10 +215,11 @@ export class RPGApp {
         changeLog: Storage.getChangeLog()
       });
       this.updateLiveBars(player);
-    } else {
-      this.root.innerHTML = renderBattleScreen({ player, battle: this.state.currentBattle, statBar });
-      this.updateLiveBars(player);
+      return;
     }
+
+    this.root.innerHTML = renderBattleScreen({ player, battle: this.state.currentBattle, statBar });
+    this.updateLiveBars(player);
   }
 
   login() {
@@ -254,10 +258,11 @@ export class RPGApp {
   switchSection({ section }) { this.ui.section = section; this.state.notify(); }
   switchAdminTab({ tab }) { this.ui.adminTab = tab; this.state.notify(); }
 
+  adminItemTypeChange({ value }) { this.ui.adminItemType = value; this.state.notify(); }
+  adminMonsterLocationChange({ value }) { this.ui.adminMonsterLocation = value; this.state.notify(); }
+
   travel({ location }) {
     const player = this.getUser();
-    const currentMonster = this.getMonsterForLocation(player, player.location);
-    if (currentMonster?.isAlive) return showNotification('Сначала победите монстра!', NotificationType.WARNING);
     if (!LOCATION_CONFIG[location]) return;
     player.location = location;
     this.ui.section = 'location';
@@ -272,10 +277,8 @@ export class RPGApp {
     if (idx < 0) return;
     const item = pile.items[idx];
     if (!player.canCarryItem(item)) return showNotification('Перевес! Нельзя подобрать.', NotificationType.WARNING);
-    player.inventory.push(item);
-    pile.items.splice(idx, 1);
-    this.saveUser(player);
-    this.state.notify();
+    player.inventory.push(item); pile.items.splice(idx, 1);
+    this.saveUser(player); this.state.notify();
   }
 
   toMainChest({ itemId }) {
@@ -285,8 +288,7 @@ export class RPGApp {
     if (idx < 0) return;
     player.world.mainChest.items.push(player.inventory[idx]);
     player.inventory.splice(idx, 1);
-    this.saveUser(player);
-    this.state.notify();
+    this.saveUser(player); this.state.notify();
   }
 
   inventoryAction({ mode, itemId }) {
@@ -302,76 +304,90 @@ export class RPGApp {
       player.inventory = player.inventory.filter((x) => x.id !== item.id);
       player.world[player.location].lootPile.items.push(item);
     }
-    this.saveUser(player);
-    this.state.notify();
+    this.saveUser(player); this.state.notify();
   }
 
   unequip({ slot }) {
     const player = this.getUser();
     const r = player.unequipItem(slot);
     if (!r.ok) return showNotification(r.reason, NotificationType.WARNING);
-    this.saveUser(player);
-    this.state.notify();
+    this.saveUser(player); this.state.notify();
   }
 
   equipSkill({ skillId }) {
     const player = this.getUser();
     const r = player.equipSkill(skillId);
     if (!r.ok) return showNotification(r.reason, NotificationType.WARNING);
-    this.saveUser(player);
-    this.state.notify();
+    this.saveUser(player); this.state.notify();
   }
 
   unequipSkill({ slot }) {
     const player = this.getUser();
     const r = player.unequipSkill(Number(slot));
     if (!r.ok) return showNotification(r.reason, NotificationType.WARNING);
-    this.saveUser(player);
-    this.state.notify();
+    this.saveUser(player); this.state.notify();
   }
 
   openBattleSkills() {
     const player = this.getUser();
     const equipped = player.skills.equipped.filter(Boolean);
     const html = `<div class="mini-skills"><h3>Экипированные умения</h3>${equipped.length ? equipped.map((id) => {
-      const skill = SKILL_LIBRARY[id];
-      if (!skill) return '';
-      return `<div class="mini-skill-row"><b>${skill.icon || '✨'} ${skill.name}</b><span>MP: ${skill.manaCost || 0}</span><button data-action="battleUseSkill" data-skill-id="${skill.id}">Применить</button></div>`;
+      const s = SKILL_LIBRARY[id];
+      if (!s) return '';
+      return `<div class="mini-skill-row"><b>${s.icon || '✨'} ${s.name}</b><span>MP: ${s.manaCost || 0}</span><button data-action="battleUseSkill" data-skill-id="${s.id}">Применить</button></div>`;
     }).join('') : '<div class="muted">Нет экипированных умений.</div>'}<button class="secondary" data-action="closeAnyModal">Закрыть</button></div>`;
     openModal(html);
   }
 
   battleUseSkill({ skillId }) { closeModal(); this.battleAction({ mode: 'skill', skillId }); }
 
-  startBattle() {
+  startBattle({ monsterKey }) {
     const player = this.getUser();
-    const monster = this.getMonsterForLocation(player, player.location);
-    if (!monster?.isAlive) return showNotification('Монстра нет.', NotificationType.INFO);
-    this.state.dispatch({ type: 'START_BATTLE', payload: { monster: monster.toJSON(), log: ['Бой начался!'], phase: 'player', acted: false, playerDeadline: Date.now() + 10000, monsterAttackAt: null } });
+    const monsters = this.getMonstersForLocation(player, player.location);
+    const monster = monsterKey ? monsters.find((m) => m.key === monsterKey) : monsters.find((m) => m.isAlive);
+    if (!monster?.isAlive) return showNotification('Монстр недоступен.', NotificationType.INFO);
+    const now = Date.now();
+    this.state.dispatch({ type: 'START_BATTLE', payload: { monsterKey: monster.key, monster: monster.toJSON(), log: ['Бой начался!'], acted: false, monsterActed: false, turnEndsAt: now + 10000, monsterAttackAt: now + randomInt(5000, 10000) } });
   }
 
   handleBattleTimer() {
     const b = this.state.currentBattle;
     if (!b) return;
-    const now = Date.now();
     const player = this.getUser();
-    const mcfg = LOCATION_CONFIG[player.location]?.monsters?.[0];
+    const mcfg = this.getMonsterConfig(player.location, b.monsterKey);
     if (!mcfg) return;
     const monster = new Monster(mcfg, b.monster);
-    if (b.phase === 'player' && now >= b.playerDeadline) {
-      b.log.push('⏱️ Время вышло: ход пропущен.');
-      b.phase = 'monster';
+    const now = Date.now();
+
+    if (!b.monsterActed && now >= b.monsterAttackAt) {
+      this.monsterTurn(player, monster, b.log, false);
+      if (this.state.screen !== 'battle') return;
+      b.monsterActed = true;
+      b.monster = monster.toJSON();
+    }
+
+    if (now >= b.turnEndsAt) {
+      b.log.push('⏱️ Ход завершён. Новый раунд!');
+      b.acted = false;
+      b.monsterActed = false;
+      b.turnEndsAt = now + 10000;
       b.monsterAttackAt = now + randomInt(5000, 10000);
     }
-    if (b.phase === 'monster' && now >= b.monsterAttackAt) return this.monsterTurn(player, monster, b.log);
+
     this.state.currentBattle = { ...b, monster: monster.toJSON() };
+  }
+
+  getMonsterConfig(location, key) {
+    const list = LOCATION_CONFIG[location]?.monsters || [];
+    return list.find((m) => m.key === key) || list[0] || null;
   }
 
   battleAction({ mode, skillId }) {
     const b = this.state.currentBattle;
-    if (!b || b.phase !== 'player' || b.acted) return;
+    if (!b || b.acted) return;
     const player = this.getUser();
-    const mcfg = LOCATION_CONFIG[player.location].monsters[0];
+    const mcfg = this.getMonsterConfig(player.location, b.monsterKey);
+    if (!mcfg) return;
     const monster = new Monster(mcfg, b.monster);
     const log = b.log;
 
@@ -394,30 +410,32 @@ export class RPGApp {
       player.world[player.location].lootPile.items.push(...loot);
       log.push(`Победа! +${exp} EXP. Лут: ${loot.map((i) => `${i.icon || '📦'} ${i.name}`).join(', ') || 'нет'}`);
       if (lvl > 0) log.push(`Новый уровень: +${lvl}`);
-      return this.finishBattle(player, monster, log, true);
+      return this.finishBattle(player, monster, log, true, b.monsterKey);
     }
 
-    this.state.currentBattle = { ...b, monster: monster.toJSON(), log, acted: true, phase: 'monster', monsterAttackAt: Date.now() + randomInt(5000, 10000) };
+    this.state.currentBattle = { ...b, monster: monster.toJSON(), log, acted: true };
     this.saveUser(player);
     this.state.notify();
   }
 
-  monsterTurn(player, monster, log) {
-    const res = player.takeDamage(monster.attack());
-    log.push(`${monster.name} наносит ${res.damageTaken} урона.`);
+  monsterTurn(player, monster, log, notify = true) {
+    const raw = monster.attack();
+    const res = player.takeDamage(raw);
+    log.push(`${monster.name} наносит ${res.damageTaken} урона (база ${raw}, с учётом брони).`);
     player.updateBattleState();
     if (!res.alive) {
-      player.restoreHealthAndMana();
-      log.push('Поражение. Вы восстановились.');
-      return this.finishBattle(player, monster, log, false);
+      player.hp = 0;
+      player.mp = 0;
+      log.push('Поражение. HP и MP обнулены.');
+      return this.finishBattle(player, monster, log, false, this.state.currentBattle.monsterKey);
     }
-    this.state.currentBattle = { ...this.state.currentBattle, monster: monster.toJSON(), log, phase: 'player', acted: false, playerDeadline: Date.now() + 10000, monsterAttackAt: null };
     this.saveUser(player);
-    this.state.notify();
+    if (notify) this.state.notify();
   }
 
-  finishBattle(player, monster, log, victory) {
-    player.world[player.location].monsters[monster.key] = monster.toJSON();
+  finishBattle(player, monster, log, victory, monsterKey) {
+    const key = monsterKey || monster.key;
+    player.world[player.location].monsters[key] = monster.toJSON();
     this.saveUser(player);
     if (victory === true) showNotification('Победа!', NotificationType.SUCCESS);
     if (victory === false) showNotification('Поражение!', NotificationType.ERROR);
@@ -427,20 +445,14 @@ export class RPGApp {
 
   openChestManager() {
     const player = this.getUser();
-    const inMain = player.location === 'Главная';
-    if (!inMain) return showNotification('Интерфейс личного сундука доступен в Главной.', NotificationType.WARNING);
+    if (player.location !== 'Главная') return showNotification('Интерфейс личного сундука доступен в Главной.', NotificationType.WARNING);
     const chestItems = player.world.mainChest.items;
     const inv = player.inventory;
     const card = (item, action, txt) => `<div class="item-card"><div><b>${item.icon || '📦'} ${item.name}</b></div><div class="muted">${item.type} | ⚖ ${item.weight || 0}</div><button data-action="${action}" data-item-id="${item.id}">${txt}</button></div>`;
     openModal(`<h3>Сундук хранилища</h3><div class="row"><div style="flex:1"><h4>Сундук</h4>${chestItems.map((i) => card(i, 'pickupItem', 'В сумку').replace('data-action="pickupItem"', 'data-action="pickupItem" data-source="main"')).join('') || '<div class="muted">Пусто</div>'}</div><div style="flex:1"><h4>Сумка</h4>${inv.map((i) => card(i, 'toMainChest', 'В сундук')).join('') || '<div class="muted">Пусто</div>'}</div></div><button class="secondary" data-action="closeAnyModal">Закрыть</button>`);
   }
 
-  adminSelectUser({ username }) {
-    if (!this.isAdminUser()) return;
-    this.ui.adminSelectedUser = username;
-    this.state.notify();
-  }
-
+  adminSelectUser({ username }) { if (this.isAdminUser()) { this.ui.adminSelectedUser = username; this.state.notify(); } }
   adminToggleBan() {
     if (!this.isAdminUser()) return;
     const username = this.ui.adminSelectedUser;
@@ -479,7 +491,6 @@ export class RPGApp {
     const name = document.getElementById('item-name')?.value?.trim();
     const type = document.getElementById('item-type')?.value;
     if (!id || !name || !type) return showNotification('Заполните ID, имя и тип.', NotificationType.WARNING);
-
     const base = {
       key: id,
       name,
@@ -492,22 +503,14 @@ export class RPGApp {
       levelRequirement: Number(document.getElementById('item-level')?.value || 1),
       description: document.getElementById('item-desc')?.value || ''
     };
-
     if (type === 'weapon') base.damage = Number(document.getElementById('item-damage')?.value || 1);
-    if (type === 'armor') {
-      base.defense = Number(document.getElementById('item-defense')?.value || 1);
-      base.slot = document.getElementById('item-slot')?.value || 'body';
-    }
-    if (type === 'consumable') {
-      base.effect = document.getElementById('item-effect')?.value || 'heal';
-      base.power = Number(document.getElementById('item-power')?.value || 1);
-    }
-
+    if (type === 'armor') { base.defense = Number(document.getElementById('item-defense')?.value || 1); base.slot = document.getElementById('item-slot')?.value || 'body'; }
+    if (type === 'consumable') { base.effect = document.getElementById('item-effect')?.value || 'heal'; base.power = Number(document.getElementById('item-power')?.value || 1); }
     this.content.items[id] = base;
     this.persistContent();
     this.saveContentLog('create-item', { id, type });
-    showNotification('Предмет сохранён в редакторе.', NotificationType.SUCCESS);
     this.state.notify();
+    showNotification('Предмет сохранён.', NotificationType.SUCCESS);
   }
 
   adminDeleteItem() {
@@ -534,10 +537,8 @@ export class RPGApp {
       const chance = Number(row.querySelector('[data-item-chance]')?.value || 0);
       if (itemKey) loot.push({ itemKey, chance });
     });
-
     const monster = {
-      key,
-      name,
+      key, name,
       icon: document.getElementById('monster-icon')?.value || '👾',
       level: Number(document.getElementById('monster-level')?.value || 1),
       hpMax: Number(document.getElementById('monster-hp')?.value || 20),
@@ -549,28 +550,53 @@ export class RPGApp {
       expReward: Number(document.getElementById('monster-exp')?.value || 10),
       lootTable: loot.slice(0, 10)
     };
-
     if (!this.content.monstersByLocation[location]) this.content.monstersByLocation[location] = [];
-    this.content.monstersByLocation[location].push(monster);
+    const arr = this.content.monstersByLocation[location];
+    const idx = arr.findIndex((m) => m.key === key);
+    if (idx >= 0) arr[idx] = monster;
+    else {
+      if (arr.length >= 5) return showNotification('Максимум 5 монстров на локацию.', NotificationType.WARNING);
+      arr.push(monster);
+    }
     this.persistContent();
-    this.saveContentLog('create-monster', { location, key });
+    this.saveContentLog('save-monster', { location, key });
     this.state.notify();
-    showNotification('Монстр добавлен.', NotificationType.SUCCESS);
+    showNotification('Монстр сохранён.', NotificationType.SUCCESS);
   }
 
-  adminClearInventory() {
+  adminDeleteMonster() {
     if (!this.isAdminUser()) return;
-    const username = this.ui.adminSelectedUser;
-    const target = this.state.playersDB.players[username];
-    if (!target) return;
-    const p = new Player(target.player);
-    p.normalize();
-    p.inventory = [];
-    target.player = p;
-    this.saveAnyUser(username, target);
-    this.saveContentLog('clear-inventory', { username });
+    const location = document.getElementById('monster-location')?.value;
+    const key = document.getElementById('monster-key')?.value?.trim();
+    if (!location || !key) return;
+    const arr = this.content.monstersByLocation[location] || [];
+    this.content.monstersByLocation[location] = arr.filter((m) => m.key !== key);
+    this.persistContent();
+    this.saveContentLog('delete-monster', { location, key });
     this.state.notify();
-    showNotification('Инвентарь очищен.', NotificationType.WARNING);
+    showNotification('Монстр удалён.', NotificationType.WARNING);
+  }
+
+  adminLoadMonster({ location, key }) {
+    const m = (LOCATION_CONFIG[location]?.monsters || []).find((x) => x.key === key);
+    if (!m) return;
+    this.ui.adminMonsterLocation = location;
+    this.state.notify();
+    setTimeout(() => {
+      const set = (id, val) => { const el = document.getElementById(id); if (el) el.value = val ?? ''; };
+      set('monster-location', location);
+      set('monster-key', m.key);
+      set('monster-name', m.name);
+      set('monster-icon', m.icon);
+      set('monster-level', m.level || 1);
+      set('monster-defense', m.defense || 0);
+      set('monster-hp', m.hpMax);
+      set('monster-mp', m.mpMax);
+      set('monster-min', m.minDmg);
+      set('monster-max', m.maxDmg);
+      set('monster-exp', m.expReward || 10);
+      set('monster-respawn', m.defaultRespawnTime || 15);
+    }, 0);
   }
 
   adminAddItemToPlayer() {
@@ -579,14 +605,21 @@ export class RPGApp {
     const target = this.state.playersDB.players[username];
     const key = document.getElementById('admin-item-key')?.value;
     if (!target || !key || !STATIC_ITEMS[key]) return;
-    const p = new Player(target.player);
-    p.normalize();
-    p.inventory.push(LootItem.create(key));
-    target.player = p;
-    this.saveAnyUser(username, target);
+    const p = new Player(target.player); p.normalize(); p.inventory.push(LootItem.create(key));
+    target.player = p; this.saveAnyUser(username, target);
     this.saveContentLog('add-item-player', { username, key });
     this.state.notify();
-    showNotification('Предмет добавлен игроку.', NotificationType.SUCCESS);
+  }
+
+  adminClearInventory() {
+    if (!this.isAdminUser()) return;
+    const username = this.ui.adminSelectedUser;
+    const target = this.state.playersDB.players[username];
+    if (!target) return;
+    const p = new Player(target.player); p.normalize(); p.inventory = [];
+    target.player = p; this.saveAnyUser(username, target);
+    this.saveContentLog('clear-inventory', { username });
+    this.state.notify();
   }
 
   closeAnyModal() { closeModal(); }

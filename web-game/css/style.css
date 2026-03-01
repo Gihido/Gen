@@ -721,3 +721,17 @@ h5 {
     flex-direction: column;
   }
 }
+
+
+@media (max-width: 640px) {
+  .app-root { padding: 8px; }
+  .topbar { border-radius: 12px; padding: 8px 10px; }
+  .topbar h1 { font-size: 1.05rem; }
+  .hamburger { width: 40px; height: 40px; }
+  .game-panel, .panel-box, .item-card, .equip-slot, .fighter-card { padding: 8px; border-radius: 10px; }
+  .item-card__head { grid-template-columns: auto 1fr; }
+  .item-card__head .rarity { grid-column: 1 / -1; justify-self: start; }
+  .battle-actions button, .col button { width: 100%; }
+  .admin-tabs button { min-width: 0; flex: 1 1 calc(50% - 8px); }
+  .mini-skill-row { flex-direction: column; align-items: stretch; }
+}

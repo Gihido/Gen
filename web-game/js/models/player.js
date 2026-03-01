@@ -34,7 +34,11 @@ export class Player {
   }
 
   getMaxInventoryWeight() { return 100 + this.stats.strength * 5; }
-  getCurrentInventoryWeight() { return this.inventory.reduce((a, i) => a + (i.weight || 0), 0); }
+  getCurrentInventoryWeight() {
+    const inv = this.inventory.reduce((a, i) => a + (i.weight || 0), 0);
+    const equipped = Object.values(this.equippedItems || {}).reduce((a, i) => a + (i?.weight || 0), 0);
+    return inv + equipped;
+  }
   canCarryItem(item) { return this.getCurrentInventoryWeight() + (item.weight || 0) <= this.getMaxInventoryWeight(); }
 
   checkItemRequirements(item) {
