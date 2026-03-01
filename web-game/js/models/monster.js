@@ -20,6 +20,8 @@ export class Monster {
     this.key = config.key;
     this.name = config.name;
     this.icon = config.icon;
+    this.level = config.level || 1;
+    this.defense = config.defense || 0;
     this.hpMax = persisted.hpMax ?? config.hpMax;
     this.mpMax = persisted.mpMax ?? config.mpMax;
     this.hp = persisted.hp ?? config.hpMax;
@@ -28,9 +30,10 @@ export class Monster {
     this.maxDmg = config.maxDmg;
     this.defaultRespawnTime = config.defaultRespawnTime;
     this.lootKeys = config.lootKeys || [];
+    this.lootTable = config.lootTable || [];
     this.respawnTime = persisted.respawnTime || null;
     this.isAlive = persisted.isAlive ?? true;
-    this.expReward = Math.floor(this.hpMax / 2 + this.maxDmg * 2);
+    this.expReward = config.expReward || Math.floor(this.hpMax / 2 + this.maxDmg * 2);
     this.tryRespawn();
   }
 
@@ -48,7 +51,8 @@ export class Monster {
   }
 
   takeDamage(dmg) {
-    this.hp -= dmg;
+    const reduced = Math.max(1, dmg - this.defense);
+    this.hp -= reduced;
     if (this.hp <= 0) {
       this.hp = 0;
       this.isAlive = false;
@@ -60,9 +64,21 @@ export class Monster {
   attack() { return randomInt(this.minDmg, this.maxDmg); }
 
   generateLoot() {
-    const count = randomInt(1, 2);
     const result = [];
+    if (Array.isArray(this.lootTable) && this.lootTable.length) {
+      this.lootTable.slice(0, 10).forEach((entry) => {
+        const chance = Math.max(0, Math.min(100, Number(entry.chance ?? 0)));
+        if (randomInt(1, 100) <= chance) {
+          const item = LootItem.create(entry.itemKey);
+          if (item) result.push(item);
+        }
+      });
+      return result;
+    }
+
+    const count = randomInt(1, 2);
     for (let i = 0; i < count; i++) {
+      if (!this.lootKeys.length) break;
       const key = this.lootKeys[randomInt(0, this.lootKeys.length - 1)];
       const item = LootItem.create(key);
       if (item) result.push(item);
