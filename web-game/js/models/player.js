@@ -1,4 +1,5 @@
 import { addExperienceProgress, randomInt } from '../core/utils.js';
+import { DEFAULT_UNLOCKED_SKILLS, SKILL_LIBRARY } from '../data/skills.js';
 
 export class Player {
   constructor(data) { Object.assign(this, data); }
@@ -13,6 +14,7 @@ export class Player {
       inventory: [],
       equippedItems: { weapon: null, head: null, body: null, legs: null },
       battleState: { stunnedTurns: 0, defenseActive: false },
+      skills: { unlocked: [...DEFAULT_UNLOCKED_SKILLS], equipped: [DEFAULT_UNLOCKED_SKILLS[0], null, null] },
       world: null,
       avatar: className
     };
@@ -25,6 +27,10 @@ export class Player {
       delete this.equippedItems.armor;
     }
     ['weapon', 'head', 'body', 'legs'].forEach((s) => { if (this.equippedItems[s] === undefined) this.equippedItems[s] = null; });
+    if (!this.skills) this.skills = { unlocked: [...DEFAULT_UNLOCKED_SKILLS], equipped: [DEFAULT_UNLOCKED_SKILLS[0], null, null] };
+    if (!Array.isArray(this.skills.unlocked)) this.skills.unlocked = [...DEFAULT_UNLOCKED_SKILLS];
+    if (!Array.isArray(this.skills.equipped)) this.skills.equipped = [null, null, null];
+    while (this.skills.equipped.length < 3) this.skills.equipped.push(null);
   }
 
   getMaxInventoryWeight() { return 100 + this.stats.strength * 5; }
@@ -58,6 +64,41 @@ export class Player {
     this.inventory.push(item);
     this.equippedItems[slot] = null;
     return { ok: true };
+  }
+
+  equipSkill(skillId) {
+    if (!this.skills.unlocked.includes(skillId)) return { ok: false, reason: 'Умение не разблокировано.' };
+    if (this.skills.equipped.includes(skillId)) return { ok: false, reason: 'Умение уже экипировано.' };
+    const slot = this.skills.equipped.findIndex((s) => !s);
+    if (slot < 0) return { ok: false, reason: 'Нет свободного слота умения.' };
+    this.skills.equipped[slot] = skillId;
+    return { ok: true };
+  }
+
+  unequipSkill(slot) {
+    if (!this.skills.equipped[slot]) return { ok: false, reason: 'Слот пуст.' };
+    this.skills.equipped[slot] = null;
+    return { ok: true };
+  }
+
+  useSkill(skillId, monster) {
+    if (!this.skills.unlocked.includes(skillId)) return { ok: false, reason: 'Умение не разблокировано.' };
+    const skill = SKILL_LIBRARY[skillId];
+    if (!skill) return { ok: false, reason: 'Умение не найдено.' };
+    const manaCost = skill.manaCost || 0;
+    if (this.mp < manaCost) return { ok: false, reason: 'Недостаточно маны.' };
+    this.mp -= manaCost;
+
+    if (skill.effect?.type === 'heal') {
+      const value = skill.effect.value || 0;
+      this.hp = Math.min(this.hpMax, this.hp + value);
+      return { ok: true, log: `${skill.icon || '✨'} ${skill.name}: восстановлено ${value} HP.` };
+    }
+
+    const bonusDamage = skill.effect?.value || 0;
+    const dmg = this.attack() + bonusDamage;
+    if (monster) monster.takeDamage(dmg);
+    return { ok: true, log: `${skill.icon || '✨'} ${skill.name}: нанесено ${dmg} урона.` };
   }
 
   attack() { return randomInt(this.minDmg, this.maxDmg) + (this.equippedItems.weapon?.damage || 0); }
