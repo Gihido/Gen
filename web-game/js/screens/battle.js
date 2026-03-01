@@ -30,7 +30,9 @@ export function renderBattleScreen({ player, battle, statBar }) {
       <div class="battle-actions ${battle.acted ? 'disabled' : ''}">
         <button data-action="battleAction" data-mode="attack">Атаковать</button>
         <button class="secondary" data-action="openBattleSkills">Умения</button>
+        <button class="secondary" data-action="openBattleConsumables" ${battle.consumableUsed ? 'disabled' : ''}>🧪 Расходник</button>
       </div>
+      <div class="muted">За ход: расходник ${battle.consumableUsed ? 'использован' : 'доступен'}, атака ${battle.acted ? 'выполнена' : 'доступна'}</div>
 
       <div class="battle-log" id="battle-log">
         ${battle.log.slice(-16).map((x) => `<div class="log-line">• ${x}</div>`).join('')}

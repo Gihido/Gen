@@ -82,6 +82,9 @@ export class RPGApp {
       if (!LOCATION_CONFIG[location]) return;
       LOCATION_CONFIG[location].monsters = monsters.slice(0, 5);
     });
+    Object.entries(this.content.skills || {}).forEach(([id, skill]) => {
+      SKILL_LIBRARY[id] = skill;
+    });
   }
 
   persistContent() {
@@ -97,6 +100,7 @@ export class RPGApp {
     const now = Date.now();
     if (now - this.ui.lastRegenAt < 1000) return;
     this.ui.lastRegenAt = now;
+    if (this.state.screen === 'battle') return;
     const player = this.getUser();
     if (!player) return;
     const before = `${player.hp}|${player.mp}`;
@@ -301,8 +305,11 @@ export class RPGApp {
       if (!r.ok) return showNotification(r.reason, NotificationType.WARNING);
     }
     if (mode === 'drop') {
-      player.inventory = player.inventory.filter((x) => x.id !== item.id);
-      player.world[player.location].lootPile.items.push(item);
+      const idx = player.inventory.findIndex((x) => x.id === item.id);
+      if (idx >= 0) {
+        player.world[player.location].lootPile.items.push(player.inventory[idx]);
+        player.inventory.splice(idx, 1);
+      }
     }
     this.saveUser(player); this.state.notify();
   }
@@ -341,13 +348,37 @@ export class RPGApp {
 
   battleUseSkill({ skillId }) { closeModal(); this.battleAction({ mode: 'skill', skillId }); }
 
+  openBattleConsumables() {
+    const b = this.state.currentBattle;
+    if (!b || b.acted || b.consumableUsed) return;
+    const player = this.getUser();
+    const consumables = player.inventory.filter((i) => i.type === 'consumable');
+    const html = `<div class="mini-skills"><h3>Расходники</h3>${consumables.length ? consumables.map((i) => `<div class="mini-skill-row"><b>${i.icon || '🧪'} ${i.name}</b><span>${i.effect}:${i.power || 0}</span><button data-action="battleUseConsumable" data-item-id="${i.id}">Использовать</button></div>`).join('') : '<div class="muted">Нет расходников.</div>'}<button class="secondary" data-action="closeAnyModal">Закрыть</button></div>`;
+    openModal(html);
+  }
+
+  battleUseConsumable({ itemId }) {
+    closeModal();
+    const b = this.state.currentBattle;
+    if (!b || b.acted || b.consumableUsed) return;
+    const player = this.getUser();
+    const c = player.inventory.find((x) => x.id === itemId && x.type === 'consumable');
+    if (!c) return showNotification('Расходник не найден.', NotificationType.WARNING);
+    player.useConsumable(c);
+    b.log.push(`Использован расходник: ${c.name}.`);
+    b.consumableUsed = true;
+    this.saveUser(player);
+    this.state.currentBattle = { ...b };
+    this.state.notify();
+  }
+
   startBattle({ monsterKey }) {
     const player = this.getUser();
     const monsters = this.getMonstersForLocation(player, player.location);
     const monster = monsterKey ? monsters.find((m) => m.key === monsterKey) : monsters.find((m) => m.isAlive);
     if (!monster?.isAlive) return showNotification('Монстр недоступен.', NotificationType.INFO);
     const now = Date.now();
-    this.state.dispatch({ type: 'START_BATTLE', payload: { monsterKey: monster.key, monster: monster.toJSON(), log: ['Бой начался!'], acted: false, monsterActed: false, turnEndsAt: now + 10000, monsterAttackAt: now + randomInt(5000, 10000) } });
+    this.state.dispatch({ type: 'START_BATTLE', payload: { monsterKey: monster.key, monster: monster.toJSON(), log: ['Бой начался!'], acted: false, consumableUsed: false, monsterActed: false, turnEndsAt: now + 10000, monsterAttackAt: now + randomInt(5000, 10000) } });
   }
 
   handleBattleTimer() {
@@ -369,12 +400,15 @@ export class RPGApp {
     if (now >= b.turnEndsAt) {
       b.log.push('⏱️ Ход завершён. Новый раунд!');
       b.acted = false;
+      b.consumableUsed = false;
       b.monsterActed = false;
       b.turnEndsAt = now + 10000;
       b.monsterAttackAt = now + randomInt(5000, 10000);
+      this.state.notify();
     }
 
     this.state.currentBattle = { ...b, monster: monster.toJSON() };
+    this.state.notify();
   }
 
   getMonsterConfig(location, key) {
@@ -483,6 +517,41 @@ export class RPGApp {
     this.saveContentLog('save-player-stats', { username, hp: p.hp, mp: p.mp, level: p.level });
     this.state.notify();
     showNotification('Характеристики сохранены.', NotificationType.SUCCESS);
+  }
+
+
+  adminCreateSkill() {
+    if (!this.isAdminUser()) return;
+    const id = document.getElementById('skill-id')?.value?.trim();
+    const name = document.getElementById('skill-name')?.value?.trim();
+    if (!id || !name) return showNotification('Укажите id и имя умения.', NotificationType.WARNING);
+    const skill = {
+      id,
+      name,
+      icon: document.getElementById('skill-icon')?.value || '✨',
+      description: document.getElementById('skill-desc')?.value || '',
+      manaCost: Number(document.getElementById('skill-mana')?.value || 0),
+      levelRequirement: Number(document.getElementById('skill-level')?.value || 1),
+      effect: { type: document.getElementById('skill-effect')?.value || 'damage', value: Number(document.getElementById('skill-power')?.value || 1) }
+    };
+    if (!this.content.skills) this.content.skills = {};
+    this.content.skills[id] = skill;
+    this.persistContent();
+    this.saveContentLog('save-skill', { id });
+    this.state.notify();
+    showNotification('Умение сохранено.', NotificationType.SUCCESS);
+  }
+
+  adminDeleteSkill() {
+    if (!this.isAdminUser()) return;
+    const id = document.getElementById('skill-id')?.value?.trim();
+    if (!id) return;
+    if (this.content.skills) delete this.content.skills[id];
+    if (SKILL_LIBRARY[id]) delete SKILL_LIBRARY[id];
+    this.persistContent();
+    this.saveContentLog('delete-skill', { id });
+    this.state.notify();
+    showNotification('Умение удалено.', NotificationType.WARNING);
   }
 
   adminCreateItem() {

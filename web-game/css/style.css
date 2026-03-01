@@ -735,3 +735,49 @@ h5 {
   .admin-tabs button { min-width: 0; flex: 1 1 calc(50% - 8px); }
   .mini-skill-row { flex-direction: column; align-items: stretch; }
 }
+
+
+.scroll-pane {
+  max-height: 48vh;
+  overflow: auto;
+  padding-right: 6px;
+}
+
+.monster-strip {
+  display: flex;
+  gap: 10px;
+  overflow-x: auto;
+  padding-bottom: 6px;
+  justify-content: center;
+}
+
+.monster-strip .monster-box {
+  min-width: 190px;
+  max-width: 220px;
+  flex: 0 0 auto;
+}
+
+.location-nav {
+  border-radius: 10px;
+  padding: 8px 10px;
+  min-width: 110px;
+  font-size: 0.92rem;
+}
+
+@media (max-width: 640px) {
+  .scroll-pane {
+    max-height: 34vh;
+  }
+  .monster-strip {
+    justify-content: flex-start;
+  }
+  .monster-strip .monster-box {
+    min-width: 160px;
+    max-width: 176px;
+  }
+  .location-nav {
+    min-width: 90px;
+    padding: 7px 8px;
+    font-size: 0.82rem;
+  }
+}

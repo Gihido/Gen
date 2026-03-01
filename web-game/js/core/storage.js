@@ -9,7 +9,8 @@ const defaultPlayers = () => ({ players: {}, metadata: { created: Date.now(), la
 const defaultContent = () => ({
   items: {},
   monstersByLocation: {},
-  locationChestConfigs: {}
+  locationChestConfigs: {},
+  skills: {}
 });
 
 export const Storage = {
@@ -44,7 +45,7 @@ export const Storage = {
       const raw = localStorage.getItem(GAME_CONTENT_KEY);
       if (!raw) return defaultContent();
       const parsed = JSON.parse(raw);
-      return { ...defaultContent(), ...parsed, items: parsed.items || {}, monstersByLocation: parsed.monstersByLocation || {}, locationChestConfigs: parsed.locationChestConfigs || {} };
+      return { ...defaultContent(), ...parsed, items: parsed.items || {}, monstersByLocation: parsed.monstersByLocation || {}, locationChestConfigs: parsed.locationChestConfigs || {}, skills: parsed.skills || {} };
     } catch {
       return defaultContent();
     }

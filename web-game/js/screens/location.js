@@ -28,7 +28,7 @@ function statTile(title, current, max, cls, statBar, valueId, barAttr) {
 }
 
 function skillCard(skill, unlocked, equipped) {
-  return `<article class="skill-card ${unlocked ? 'unlocked' : 'locked'}"><h4>${skill.icon || '✨'} ${skill.name}</h4><div class="muted">${skill.description || ''}</div><div class="muted">MP: ${skill.manaCost || 0}</div><div class="row">${unlocked ? (equipped ? '<span class="tag">Экипировано</span>' : `<button data-action="equipSkill" data-skill-id="${skill.id}">Экипировать</button>`) : '<span class="tag locked">Заблокировано</span>'}</div></article>`;
+  return `<article class="skill-card ${unlocked ? 'unlocked' : 'locked'}"><h4>${skill.icon || '✨'} ${skill.name}</h4><div class="muted">${skill.description || ''}</div><div class="muted">MP: ${skill.manaCost || 0} | Ур: ${skill.levelRequirement || 1}</div><div class="row">${unlocked ? (equipped ? '<span class="tag">Экипировано</span>' : `<button data-action="equipSkill" data-skill-id="${skill.id}">Экипировать</button>`) : '<span class="tag locked">Заблокировано</span>'}</div></article>`;
 }
 
 function adminItemEditor(items, ui) {
@@ -108,7 +108,29 @@ function adminLocationEditor() {
   return `<section class="panel-box"><h3>📍 Локации / сундук</h3><button data-action="openChestManager">Открыть личный сундук</button><div class="muted">Сундук локации (дроп) остается в локации, личный сундук — только в Главной.</div></section>`;
 }
 
-function renderAdminPanel({ playersDB, selectedAdminUser, ui, items, changeLog }) {
+
+function adminSkillsEditor(skills) {
+  const keys = Object.keys(skills);
+  return `
+    <section class="panel-box">
+      <h3>✨ Редактор умений</h3>
+      <div class="admin-grid">
+        <label>ID<input id="skill-id" placeholder="new_skill" /></label>
+        <label>Название<input id="skill-name" placeholder="Новое умение" /></label>
+        <label>Иконка<input id="skill-icon" placeholder="✨" /></label>
+        <label>Описание<input id="skill-desc" placeholder="Описание" /></label>
+        <label>Мана<input id="skill-mana" type="number" value="5" /></label>
+        <label>Требуемый уровень<input id="skill-level" type="number" value="1" /></label>
+        <label>Тип эффекта<select id="skill-effect"><option value="damage">Урон</option><option value="heal">Лечение</option></select></label>
+        <label>Сила<input id="skill-power" type="number" value="8" /></label>
+      </div>
+      <div class="row"><button data-action="adminCreateSkill">Сохранить умение</button><button class="danger" data-action="adminDeleteSkill">Удалить умение</button></div>
+      <div class="muted">Ключи: ${keys.slice(0, 20).join(', ')}${keys.length > 20 ? '...' : ''}</div>
+    </section>
+  `;
+}
+
+function renderAdminPanel({ playersDB, selectedAdminUser, ui, items, changeLog, skills }) {
   const users = Object.keys(playersDB.players || {});
   const selectedName = selectedAdminUser || users[0];
   const selected = playersDB.players[selectedName];
@@ -140,9 +162,9 @@ function renderAdminPanel({ playersDB, selectedAdminUser, ui, items, changeLog }
         <button data-action="switchAdminTab" data-tab="players" class="${ui.adminTab === 'players' ? 'ok' : 'secondary'}">Редактор игроков</button>
         <button data-action="switchAdminTab" data-tab="items" class="${ui.adminTab === 'items' ? 'ok' : 'secondary'}">Редактор вещей</button>
         <button data-action="switchAdminTab" data-tab="monsters" class="${ui.adminTab === 'monsters' ? 'ok' : 'secondary'}">Редактор монстров</button>
-        <button data-action="switchAdminTab" data-tab="locations" class="${ui.adminTab === 'locations' ? 'ok' : 'secondary'}">Локации/сундук</button>
+        <button data-action="switchAdminTab" data-tab="locations" class="${ui.adminTab === 'locations' ? 'ok' : 'secondary'}">Локации/сундук</button><button data-action="switchAdminTab" data-tab="skills" class="${ui.adminTab === 'skills' ? 'ok' : 'secondary'}">Редактор умений</button>
       </div>
-      ${ui.adminTab === 'items' ? adminItemEditor(items, ui) : ui.adminTab === 'monsters' ? adminMonsterEditor(items, ui) : ui.adminTab === 'locations' ? adminLocationEditor() : playersTab}
+      ${ui.adminTab === 'items' ? adminItemEditor(items, ui) : ui.adminTab === 'monsters' ? adminMonsterEditor(items, ui) : ui.adminTab === 'locations' ? adminLocationEditor() : ui.adminTab === 'skills' ? adminSkillsEditor(skills) : playersTab}
       ${logs}
     </div>
   `;
@@ -160,9 +182,9 @@ export function renderLocationScreen({ player, location, monster, monsters, stat
     return `<div class="monster-box ${m.isAlive ? '' : 'dead'}"><div class="monster-icon">${m.icon}</div><div class="monster-name">${m.name}</div><div class="muted">HP ${m.hp}/${m.hpMax}</div>${m.isAlive ? `<button class="ok" data-action="startBattle" data-monster-key="${m.key}">⚔ Сражаться</button>` : `<div class="muted">Респавн через <span data-countdown-to="${m.respawnTime}">${respawn}</span>с</div>`}</div>`;
   }).join('') || '<div class="muted">Монстров нет</div>';
 
-  const contentLocation = `<div class="game-panel fade-in"><header class="section-head"><h2>📍 ${player.location}</h2><div class="row">${location.links.map((l) => `<button class="nav-btn" data-action="travel" data-location="${l}">→ ${l}</button>`).join('')}</div></header><div class="location-grid"><section class="panel-box"><h3>Монстры</h3><div class="list">${monsterCards}</div></section><section class="panel-box"><h3>Сундук локации</h3><div class="list">${pile.items.map((i) => itemCard(i, `<button data-action="pickupItem" data-source="location" data-item-id="${i.id}">Подобрать</button>`)).join('') || '<div class="muted">Пусто</div>'}</div></section><section class="panel-box"><h3>Личный сундук</h3>${inMain ? `<button class="secondary" data-action="openChestManager">Открыть</button><div class="list">${mainChest.items.slice(0, 3).map((i) => itemCard(i)).join('') || '<div class="muted">Пусто</div>'}</div>` : '<div class="muted">Доступен только в Главной</div>'}</section></div></div>`;
+  const contentLocation = `<div class="game-panel fade-in"><header class="section-head"><h2>📍 ${player.location}</h2><div class="row">${location.links.map((l) => `<button class="nav-btn location-nav" data-action="travel" data-location="${l}">${l}</button>`).join('')}</div></header><div class="location-grid"><section class="panel-box"><h3>Монстры</h3><div class="monster-strip scroll-pane">${monsterCards}</div></section><section class="panel-box"><h3>Сундук локации</h3><div class="list scroll-pane">${pile.items.map((i) => itemCard(i, `<button data-action="pickupItem" data-source="location" data-item-id="${i.id}">Подобрать</button>`)).join('') || '<div class="muted">Пусто</div>'}</div></section><section class="panel-box"><h3>Личный сундук</h3>${inMain ? `<button class="secondary" data-action="openChestManager">Открыть</button><div class="list">${mainChest.items.slice(0, 3).map((i) => itemCard(i)).join('') || '<div class="muted">Пусто</div>'}</div>` : '<div class="muted">Доступен только в Главной</div>'}</section></div></div>`;
 
-  const contentInventory = `<div class="game-panel fade-in"><header class="section-head"><h2>🎒 Сумка инвентаря</h2></header><div class="list">${player.inventory.map((i) => itemCard(i, `${i.type === 'consumable' ? `<button data-action="inventoryAction" data-mode="use" data-item-id="${i.id}">Использовать</button>` : ''}${['weapon', 'armor'].includes(i.type) ? `<button data-action="inventoryAction" data-mode="equip" data-item-id="${i.id}">Экипировать</button>` : ''}<button class="danger" data-action="inventoryAction" data-mode="drop" data-item-id="${i.id}">Выкинуть</button>${inMain ? `<button class="secondary" data-action="toMainChest" data-item-id="${i.id}">В сундук</button>` : ''}`)).join('') || '<div class="muted">Сумка пуста</div>'}</div></div>`;
+  const contentInventory = `<div class="game-panel fade-in"><header class="section-head"><h2>🎒 Сумка инвентаря</h2></header><div class="list scroll-pane">${player.inventory.map((i) => itemCard(i, `${i.type === 'consumable' ? `<button data-action="inventoryAction" data-mode="use" data-item-id="${i.id}">Использовать</button>` : ''}${['weapon', 'armor'].includes(i.type) ? `<button data-action="inventoryAction" data-mode="equip" data-item-id="${i.id}">Экипировать</button>` : ''}<button class="danger" data-action="inventoryAction" data-mode="drop" data-item-id="${i.id}">Выкинуть</button>${inMain ? `<button class="secondary" data-action="toMainChest" data-item-id="${i.id}">В сундук</button>` : ''}`)).join('') || '<div class="muted">Сумка пуста</div>'}</div></div>`;
 
   const slots = ['weapon', 'head', 'body', 'legs'];
   const slotNames = { weapon: 'Оружие', head: 'Голова', body: 'Тело', legs: 'Ноги' };
@@ -171,7 +193,7 @@ export function renderLocationScreen({ player, location, monster, monsters, stat
 
   const contentSkills = `<div class="game-panel fade-in"><header class="section-head"><h2>✨ Система умений</h2></header><section class="panel-box"><h3>Экипированные умения</h3><div class="skill-slots">${player.skills.equipped.map((id, idx) => `<div class="equip-slot"><h4>Слот ${idx + 1}</h4>${id && skills[id] ? `<div>${skills[id].icon || '✨'} ${skills[id].name}</div><button data-action="unequipSkill" data-slot="${idx}">Снять</button>` : '<div class="muted">Пусто</div>'}</div>`).join('')}</div></section><section class="panel-box"><h3>Доступные/заблокированные</h3><div class="list">${Object.values(skills).map((s) => skillCard(s, player.skills.unlocked.includes(s.id), player.skills.equipped.includes(s.id))).join('')}</div></section></div>`;
 
-  const contentAdmin = renderAdminPanel({ playersDB, selectedAdminUser, ui, items, changeLog });
+  const contentAdmin = renderAdminPanel({ playersDB, selectedAdminUser, ui, items, changeLog, skills });
 
   return `
     <div class="topbar"><button class="hamburger" data-action="toggleSidebar">☰</button><h1>ALDOS RPG</h1></div>
