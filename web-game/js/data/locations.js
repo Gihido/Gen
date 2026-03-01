@@ -22,7 +22,7 @@ export const LOCATION_CONFIG = {
         minDmg: 2,
         maxDmg: 4,
         defaultRespawnTime: 15,
-        lootKeys: ['healing_potion', 'mana_potion', 'wolf_fang']
+        lootKeys: ['healing_potion', 'mana_potion', 'wolf_fang', 'leather_helmet', 'leather_armor', 'leather_legs']
       }
     ]
   },

@@ -2,7 +2,6 @@ import { AppState } from './state.js';
 import { hashPassword, NotificationType, randomInt } from './utils.js';
 import { showNotification, openModal, closeModal, statBar } from './ui.js';
 import { CLASSES, DEFAULT_LOCATION_STATE, GENDERS, LOCATION_CONFIG } from '../data/locations.js';
-import { ITEM_KEYS } from '../data/items.js';
 import { Player } from '../models/player.js';
 import { LootItem, Monster } from '../models/monster.js';
 import { renderAuthScreen } from '../screens/auth.js';
@@ -13,24 +12,33 @@ export class RPGApp {
   constructor(rootId = 'app') {
     this.root = document.getElementById(rootId);
     this.state = new AppState();
+    this.ui = { sidebarOpen: false, section: 'location' };
     this.bindGlobalEvents();
     this.state.subscribe(() => this.render());
     this.state.load();
-    setInterval(() => { if (this.state.screen === 'location' && this.state.currentUser) this.state.notify(); }, 1000);
+    setInterval(() => this.tick(), 1000);
   }
 
   bindGlobalEvents() {
     document.addEventListener('click', (e) => {
-      const action = e.target.dataset.action;
-      if (!action) return;
-      const payload = e.target.dataset;
+      const btn = e.target.closest('[data-action]');
+      if (!btn) return;
+      const { action, ...payload } = btn.dataset;
       if (this[action]) this[action](payload, e);
     });
   }
 
+  tick() {
+    if (this.state.screen === 'location') this.state.notify();
+    if (this.state.screen === 'battle') this.handleBattleTimer();
+  }
+
   getUser() {
     const data = this.state.userData;
-    return data ? new Player(data.player) : null;
+    if (!data) return null;
+    const p = new Player(data.player);
+    p.normalize();
+    return p;
   }
 
   saveUser(playerObj, metadataPatch = {}) {
@@ -43,14 +51,13 @@ export class RPGApp {
   }
 
   ensureWorld(player) {
-    if (!player.world) {
-      player.world = JSON.parse(JSON.stringify(DEFAULT_LOCATION_STATE));
-    }
-    Object.keys(DEFAULT_LOCATION_STATE).forEach((loc) => {
+    if (!player.world) player.world = JSON.parse(JSON.stringify(DEFAULT_LOCATION_STATE));
+    for (const loc of Object.keys(DEFAULT_LOCATION_STATE)) {
       if (!player.world[loc]) player.world[loc] = { lootPile: { items: [] }, monsters: {} };
       if (!player.world[loc].lootPile) player.world[loc].lootPile = { items: [] };
       if (!player.world[loc].monsters) player.world[loc].monsters = {};
-    });
+    }
+    if (!player.world.mainChest) player.world.mainChest = { items: [] };
   }
 
   getMonsterForLocation(player, locationName) {
@@ -64,23 +71,16 @@ export class RPGApp {
   }
 
   render() {
-    if (this.state.screen === 'auth') {
-      this.root.innerHTML = renderAuthScreen({ classes: CLASSES, genders: GENDERS });
-      return;
-    }
+    if (this.state.screen === 'auth') return (this.root.innerHTML = renderAuthScreen({ classes: CLASSES, genders: GENDERS }));
     const player = this.getUser();
-    if (!player) {
-      this.state.dispatch({ type: 'LOGOUT' });
-      return;
-    }
+    if (!player) return this.state.dispatch({ type: 'LOGOUT' });
     this.ensureWorld(player);
     if (this.state.screen === 'location') {
       const monster = this.getMonsterForLocation(player, player.location);
       this.saveUser(player);
-      this.root.innerHTML = renderLocationScreen({ player, location: LOCATION_CONFIG[player.location], monster, statBar });
-    } else if (this.state.screen === 'battle') {
-      const battle = this.state.currentBattle;
-      this.root.innerHTML = renderBattleScreen({ player, battle, statBar });
+      this.root.innerHTML = renderLocationScreen({ player, location: LOCATION_CONFIG[player.location], monster, statBar, ui: this.ui });
+    } else {
+      this.root.innerHTML = renderBattleScreen({ player, battle: this.state.currentBattle, statBar });
     }
   }
 
@@ -102,103 +102,49 @@ export class RPGApp {
     const gender = document.getElementById('reg-gender').value;
     if (username.length < 3 || password.length < 3) return showNotification('Минимум 3 символа.', NotificationType.WARNING);
     if (this.state.playersDB.players[username]) return showNotification('Пользователь уже существует.', NotificationType.WARNING);
-    const player = Player.create({ username, className, gender });
     const isAdmin = ['admin', 'gihido'].includes(username.toLowerCase());
-    this.state.playersDB.players[username] = {
-      username,
-      passwordHash: hashPassword(password),
-      player,
-      metadata: { created: Date.now(), lastLogin: null, isBanned: false, banReason: '', isAdmin }
-    };
+    this.state.playersDB.players[username] = { username, passwordHash: hashPassword(password), player: Player.create({ username, className, gender }), metadata: { created: Date.now(), lastLogin: null, isBanned: false, banReason: '', isAdmin } };
     this.state.save();
     showNotification('Регистрация успешна.', NotificationType.SUCCESS);
   }
 
   logout() { this.state.dispatch({ type: 'LOGOUT' }); }
+  toggleSidebar() { this.ui.sidebarOpen = !this.ui.sidebarOpen; this.state.notify(); }
+  switchSection({ section }) { this.ui.section = section; this.state.notify(); }
 
   travel({ location }) {
     const player = this.getUser();
-    const monster = this.getMonsterForLocation(player, player.location);
-    if (monster?.isAlive) return showNotification('Сначала победите монстра!', NotificationType.WARNING);
+    const currentMonster = this.getMonsterForLocation(player, player.location);
+    if (currentMonster?.isAlive) return showNotification('Сначала победите монстра!', NotificationType.WARNING);
+    if (!LOCATION_CONFIG[location]) return;
     player.location = location;
+    this.ui.section = 'location';
     this.saveUser(player);
-    this.state.setScreen('location');
+    this.state.notify();
   }
 
-  openChest() {
-    const player = this.getUser();
-    const pile = player.world[player.location].lootPile;
-    if (pile.items.length > 0) return showNotification('В сундуке уже есть добыча.', NotificationType.INFO);
-    const count = randomInt(1, 2);
-    for (let i = 0; i < count; i++) {
-      const key = ITEM_KEYS[randomInt(0, ITEM_KEYS.length - 1)];
-      pile.items.push(LootItem.create(key));
-    }
-    this.saveUser(player);
-    this.state.setScreen('location');
-  }
+  openChest() { showNotification('Вещи в сундук локации попадают только с монстров.', NotificationType.INFO); }
 
-  pickupItem({ itemId }) {
+  pickupItem({ itemId, source }) {
     const player = this.getUser();
-    const pile = player.world[player.location].lootPile;
+    const pile = source === 'main' ? player.world.mainChest : player.world[player.location].lootPile;
     const idx = pile.items.findIndex((x) => x.id === itemId);
     if (idx < 0) return;
     const item = pile.items[idx];
     if (!player.canCarryItem(item)) return showNotification('Перевес! Нельзя подобрать.', NotificationType.WARNING);
-    player.inventory.push(item);
-    pile.items.splice(idx, 1);
-    this.saveUser(player);
-    this.state.setScreen('location');
+    player.inventory.push(item); pile.items.splice(idx, 1);
+    this.saveUser(player); this.state.notify();
   }
 
-  showInventory() {
+  toMainChest({ itemId }) {
     const player = this.getUser();
-    const html = `
-      <h2>Сумка</h2>
-      <div class="row">
-        <input id="inv-search" placeholder="Поиск по имени" />
-        <select id="inv-filter"><option value="all">Все</option><option value="weapon">Оружие</option><option value="armor">Броня</option><option value="consumable">Расходники</option></select>
-        <select id="inv-sort"><option value="name">Сорт: имя</option><option value="weight">Сорт: вес</option><option value="value">Сорт: цена</option></select>
-      </div>
-      <div id="inv-list" class="list"></div>
-      <button data-action="closeAnyModal" class="secondary">Закрыть</button>
-    `;
-    openModal(html);
-    const renderInv = () => {
-      const search = (document.getElementById('inv-search').value || '').toLowerCase();
-      const filter = document.getElementById('inv-filter').value;
-      const sort = document.getElementById('inv-sort').value;
-      const items = [...player.inventory]
-        .filter((i) => (filter === 'all' ? true : i.type === filter))
-        .filter((i) => i.name.toLowerCase().includes(search))
-        .sort((a, b) => (sort === 'name' ? a.name.localeCompare(b.name) : (a[sort] || 0) - (b[sort] || 0)));
-      document.getElementById('inv-list').innerHTML = items.map((i) => `
-        <div class="item" title="${i.description || ''}">
-          <b>${i.name}</b> <span class="muted">(${i.type})</span> ⚖${i.weight || 0}
-          <div class="row">
-            ${i.type === 'consumable' ? `<button data-action="inventoryAction" data-mode="use" data-item-id="${i.id}">Использовать</button>` : ''}
-            ${['weapon','armor'].includes(i.type) ? `<button data-action="inventoryAction" data-mode="equip" data-item-id="${i.id}">Экипировать</button>` : ''}
-            <button class="danger" data-action="inventoryAction" data-mode="drop" data-item-id="${i.id}">Выбросить</button>
-          </div>
-        </div>
-      `).join('') || '<div class="muted">Пусто.</div>';
-    };
-    renderInv();
-    ['inv-search', 'inv-filter', 'inv-sort'].forEach((id) => document.getElementById(id).addEventListener('input', renderInv));
+    if (player.location !== 'Главная') return showNotification('Личный сундук доступен только в Главной.', NotificationType.WARNING);
+    const idx = player.inventory.findIndex((x) => x.id === itemId);
+    if (idx < 0) return;
+    player.world.mainChest.items.push(player.inventory[idx]);
+    player.inventory.splice(idx, 1);
+    this.saveUser(player); this.state.notify();
   }
-
-  showCharacterInfo() {
-    const player = this.getUser();
-    openModal(`
-      <h2>Профиль ${player.username}</h2>
-      <div class="item">Класс: ${player.className}, Пол: ${player.gender}, Ур: ${player.level}</div>
-      <div class="item">Оружие: ${player.equippedItems.weapon?.name || '—'} <button data-action="unequip" data-slot="weapon">Снять</button></div>
-      <div class="item">Броня: ${player.equippedItems.armor?.name || '—'} <button data-action="unequip" data-slot="armor">Снять</button></div>
-      <button data-action="closeAnyModal" class="secondary">Закрыть</button>
-    `);
-  }
-
-  closeAnyModal() { closeModal(); }
 
   inventoryAction({ mode, itemId }) {
     const player = this.getUser();
@@ -206,111 +152,117 @@ export class RPGApp {
     if (!item) return;
     if (mode === 'use') player.useConsumable(item);
     if (mode === 'equip') {
-      const res = player.equipItem(item.id);
-      if (!res.ok) return showNotification(res.reason, NotificationType.WARNING);
+      const r = player.equipItem(item.id);
+      if (!r.ok) return showNotification(r.reason, NotificationType.WARNING);
     }
     if (mode === 'drop') {
       player.inventory = player.inventory.filter((x) => x.id !== item.id);
       player.world[player.location].lootPile.items.push(item);
     }
-    this.saveUser(player);
-    this.showInventory();
+    this.saveUser(player); this.state.notify();
   }
 
   unequip({ slot }) {
     const player = this.getUser();
-    const res = player.unequipItem(slot);
-    if (!res.ok) return showNotification(res.reason, NotificationType.WARNING);
-    this.saveUser(player);
-    this.showCharacterInfo();
+    const r = player.unequipItem(slot);
+    if (!r.ok) return showNotification(r.reason, NotificationType.WARNING);
+    this.saveUser(player); this.state.notify();
   }
 
   startBattle() {
     const player = this.getUser();
     const monster = this.getMonsterForLocation(player, player.location);
     if (!monster?.isAlive) return showNotification('Монстра нет.', NotificationType.INFO);
-    this.state.dispatch({ type: 'START_BATTLE', payload: { monster: monster.toJSON(), log: ['Бой начался!'] } });
+    this.state.dispatch({
+      type: 'START_BATTLE',
+      payload: {
+        monster: monster.toJSON(),
+        log: ['Бой начался!'],
+        phase: 'player',
+        acted: false,
+        playerDeadline: Date.now() + 10000,
+        monsterAttackAt: null
+      }
+    });
+  }
+
+  handleBattleTimer() {
+    const b = this.state.currentBattle;
+    if (!b) return;
+    const now = Date.now();
+    const player = this.getUser();
+    const mcfg = LOCATION_CONFIG[player.location]?.monsters?.[0];
+    if (!mcfg) return;
+    const monster = new Monster(mcfg, b.monster);
+    if (b.phase === 'player' && now >= b.playerDeadline) {
+      b.log.push('⏱️ Время вышло: ход пропущен.');
+      b.phase = 'monster';
+      b.monsterAttackAt = now + randomInt(5000, 10000);
+    }
+    if (b.phase === 'monster' && now >= b.monsterAttackAt) {
+      this.monsterTurn(player, monster, b.log);
+      return;
+    }
+    this.state.currentBattle = { ...b, monster: monster.toJSON() };
+    this.state.notify();
   }
 
   battleAction({ mode }) {
+    const b = this.state.currentBattle;
+    if (!b || b.phase !== 'player' || b.acted) return;
     const player = this.getUser();
-    const battle = this.state.currentBattle;
     const mcfg = LOCATION_CONFIG[player.location].monsters[0];
-    const monster = new Monster(mcfg, battle.monster);
-    const log = battle.log;
+    const monster = new Monster(mcfg, b.monster);
+    const log = b.log;
 
-    const doMonsterAttack = () => {
-      if (!monster.isAlive) return;
-      let raw = monster.attack();
-      if (player.battleState.defenseActive) raw = Math.floor(raw / 2);
-      const res = player.takeDamage(raw);
-      log.push(`${monster.name} наносит ${res.damageTaken} урона.`);
-      player.updateBattleState();
-      if (!res.alive) {
-        player.restoreHealthAndMana();
-        log.push('Вы проиграли бой и восстановили силы.');
-        this.finishBattle(player, monster, log, false);
-        return true;
-      }
-      return false;
-    };
-
-    if (mode === 'attack') {
-      const dmg = player.attack();
-      monster.takeDamage(dmg);
-      log.push(`Вы атаковали на ${dmg}.`);
-    }
-    if (mode === 'magic') {
-      const manaCost = 8;
-      if (player.mp < manaCost) return showNotification('Недостаточно маны.', NotificationType.WARNING);
-      player.mp -= manaCost;
-      const dmg = player.attack() + randomInt(4, 10);
-      monster.takeDamage(dmg);
-      log.push(`Магический удар: ${dmg}.`);
-    }
-    if (mode === 'defense') {
-      player.battleState.defenseActive = true;
-      log.push('Вы приготовились к защите.');
-    }
-    if (mode === 'item') {
-      const consumable = player.inventory.find((x) => x.type === 'consumable');
-      if (!consumable) return showNotification('Нет расходников.', NotificationType.WARNING);
-      player.useConsumable(consumable);
-      log.push(`Использован предмет: ${consumable.name}.`);
-    }
     if (mode === 'escape') {
-      if (randomInt(1, 100) <= 45) {
-        log.push('Вы успешно сбежали!');
-        this.finishBattle(player, monster, log, null);
-        return;
-      }
+      if (randomInt(1, 100) <= 45) return this.finishBattle(player, monster, [...log, 'Вы успешно сбежали!'], null);
       log.push('Побег не удался!');
+    } else if (mode === 'attack') {
+      const dmg = player.attack(); monster.takeDamage(dmg); log.push(`Вы атаковали на ${dmg}.`);
+    } else if (mode === 'magic') {
+      if (player.mp < 8) return showNotification('Недостаточно маны.', NotificationType.WARNING);
+      player.mp -= 8; const dmg = player.attack() + randomInt(4, 10); monster.takeDamage(dmg); log.push(`Магический удар: ${dmg}.`);
+    } else if (mode === 'defense') {
+      player.battleState.defenseActive = true; log.push('Вы встали в защиту.');
+    } else if (mode === 'item') {
+      const c = player.inventory.find((x) => x.type === 'consumable');
+      if (!c) return showNotification('Нет расходников.', NotificationType.WARNING);
+      player.useConsumable(c); log.push(`Использован ${c.name}.`);
     }
 
     if (!monster.isAlive) {
-      const exp = monster.expReward;
-      const lv = player.addExperience(exp);
-      const loot = monster.generateLoot();
+      const exp = monster.expReward; const lvl = player.addExperience(exp); const loot = monster.generateLoot();
       player.world[player.location].lootPile.items.push(...loot);
-      log.push(`Победа! +${exp} опыта, лут: ${loot.map((i) => i.name).join(', ') || 'нет'}.`);
-      if (lv > 0) log.push(`Повышение уровня! +${lv}`);
-      this.finishBattle(player, monster, log, true);
-      return;
+      log.push(`Победа! +${exp} EXP. Лут: ${loot.map((i) => `${i.icon || '📦'} ${i.name}`).join(', ') || 'нет'}`);
+      if (lvl > 0) log.push(`Новый уровень: +${lvl}`);
+      return this.finishBattle(player, monster, log, true);
     }
 
-    if (doMonsterAttack()) return;
-
-    this.state.currentBattle = { monster: monster.toJSON(), log };
+    this.state.currentBattle = { ...b, monster: monster.toJSON(), log, acted: true, phase: 'monster', monsterAttackAt: Date.now() + randomInt(5000, 10000) };
     this.saveUser(player);
     this.state.notify();
+  }
+
+  monsterTurn(player, monster, log) {
+    let raw = monster.attack(); if (player.battleState.defenseActive) raw = Math.floor(raw / 2);
+    const res = player.takeDamage(raw); log.push(`${monster.name} наносит ${res.damageTaken} урона.`); player.updateBattleState();
+    if (!res.alive) {
+      player.restoreHealthAndMana(); log.push('Поражение. Вы восстановились.');
+      return this.finishBattle(player, monster, log, false);
+    }
+    this.state.currentBattle = { ...this.state.currentBattle, monster: monster.toJSON(), log, phase: 'player', acted: false, playerDeadline: Date.now() + 10000, monsterAttackAt: null };
+    this.saveUser(player); this.state.notify();
   }
 
   finishBattle(player, monster, log, victory) {
     player.world[player.location].monsters[monster.key] = monster.toJSON();
     this.saveUser(player);
-    this.state.currentBattle = { monster: monster.toJSON(), log };
     if (victory === true) showNotification('Победа!', NotificationType.SUCCESS);
     if (victory === false) showNotification('Поражение!', NotificationType.ERROR);
+    this.state.currentBattle = { ...this.state.currentBattle, log };
     this.state.dispatch({ type: 'END_BATTLE' });
   }
+
+  closeAnyModal() { closeModal(); }
 }

@@ -1,35 +1,34 @@
 import { addExperienceProgress, randomInt } from '../core/utils.js';
 
 export class Player {
-  constructor(data) {
-    Object.assign(this, data);
-  }
+  constructor(data) { Object.assign(this, data); }
 
   static create({ username, className, gender }) {
     return {
-      username,
-      className,
-      gender,
-      hp: 100,
-      hpMax: 100,
-      mp: 40,
-      mpMax: 40,
-      minDmg: 4,
-      maxDmg: 8,
-      defense: 1,
-      level: 1,
-      experience: 0,
-      location: 'Главная',
+      username, className, gender,
+      hp: 100, hpMax: 100, mp: 40, mpMax: 40,
+      minDmg: 4, maxDmg: 8, defense: 1,
+      level: 1, experience: 0, location: 'Главная',
       stats: { strength: 10, agility: 10, intelligence: 10, vitality: 10 },
       inventory: [],
-      equippedItems: { weapon: null, armor: null },
+      equippedItems: { weapon: null, head: null, body: null, legs: null },
       battleState: { stunnedTurns: 0, defenseActive: false },
-      world: null
+      world: null,
+      avatar: className
     };
   }
 
+  normalize() {
+    if (!this.equippedItems) this.equippedItems = { weapon: null, head: null, body: null, legs: null };
+    if (this.equippedItems.armor && !this.equippedItems.body) {
+      this.equippedItems.body = this.equippedItems.armor;
+      delete this.equippedItems.armor;
+    }
+    ['weapon', 'head', 'body', 'legs'].forEach((s) => { if (this.equippedItems[s] === undefined) this.equippedItems[s] = null; });
+  }
+
   getMaxInventoryWeight() { return 100 + this.stats.strength * 5; }
-  getCurrentInventoryWeight() { return this.inventory.reduce((acc, item) => acc + (item.weight || 0), 0); }
+  getCurrentInventoryWeight() { return this.inventory.reduce((a, i) => a + (i.weight || 0), 0); }
   canCarryItem(item) { return this.getCurrentInventoryWeight() + (item.weight || 0) <= this.getMaxInventoryWeight(); }
 
   checkItemRequirements(item) {
@@ -43,9 +42,9 @@ export class Player {
     if (idx < 0) return { ok: false, reason: 'Предмет не найден.' };
     const item = this.inventory[idx];
     if (!['weapon', 'armor'].includes(item.type)) return { ok: false, reason: 'Нельзя экипировать.' };
+    const slot = item.type === 'weapon' ? 'weapon' : (item.slot || 'body');
     const req = this.checkItemRequirements(item);
     if (!req.ok) return req;
-    const slot = item.type;
     if (this.equippedItems[slot]) this.inventory.push(this.equippedItems[slot]);
     this.equippedItems[slot] = item;
     this.inventory.splice(idx, 1);
@@ -61,16 +60,12 @@ export class Player {
     return { ok: true };
   }
 
-  attack() {
-    const weaponDmg = this.equippedItems.weapon?.damage || 0;
-    return randomInt(this.minDmg, this.maxDmg) + weaponDmg;
-  }
+  attack() { return randomInt(this.minDmg, this.maxDmg) + (this.equippedItems.weapon?.damage || 0); }
 
   takeDamage(dmg) {
-    const armorDef = this.equippedItems.armor?.defense || 0;
+    const armorDef = ['head', 'body', 'legs'].reduce((a, s) => a + (this.equippedItems[s]?.defense || 0), 0);
     const applied = Math.max(1, dmg - this.defense - armorDef);
-    this.hp -= applied;
-    if (this.hp < 0) this.hp = 0;
+    this.hp = Math.max(0, this.hp - applied);
     return { alive: this.hp > 0, damageTaken: applied };
   }
 
@@ -83,11 +78,7 @@ export class Player {
     return { ok: true };
   }
 
-  updateBattleState() {
-    if (this.battleState.stunnedTurns > 0) this.battleState.stunnedTurns -= 1;
-    this.battleState.defenseActive = false;
-  }
-
+  updateBattleState() { if (this.battleState.stunnedTurns > 0) this.battleState.stunnedTurns -= 1; this.battleState.defenseActive = false; }
   restoreHealthAndMana() { this.hp = this.hpMax; this.mp = this.mpMax; }
   addExperience(amount) { return addExperienceProgress(this, amount); }
 }
